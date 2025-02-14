@@ -1,0 +1,7 @@
+db:
+  user: admin
+  address: 127.0.0.1
+  port: 6666
+  schema: public
+  database: pharmacy
+  kind: POSTGRESQL

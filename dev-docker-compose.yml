@@ -1,0 +1,15 @@
+version: '3.1'
+services:
+  pharma-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: admin
+      POSTGRES_USER: admin
+      POSTGRES_DB: pharmacy
+    ports:
+      - "6666:5432"
+    volumes:
+      - pharma-data:/var/lib/postgresql/data
+volumes:
+  pharma-data:
+    external: true
