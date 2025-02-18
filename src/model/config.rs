@@ -1,58 +1,57 @@
-use clap_derive::Parser;
 use derive_getters::Getters;
-use serde::Deserialize;
-use std::fmt::format;
 use diesel::{PgConnection, SqliteConnection};
+use serde::Deserialize;
 
 #[derive(Deserialize, Getters)]
 pub struct AppConfig {
-    db: DBConfig,
+    db: DBType,
+    migration_path: Option<String>,
 }
 
 #[derive(Deserialize, Getters)]
 pub struct DBConfig {
-    user: Option<String>,
-    password: Option<String>,
-    address: Option<String>,
-    port: Option<u32>,
-    schema: Option<String>,
-    database: Option<String>,
+    user: String,
+    password: String,
+    address: String,
+    port: u32,
+    schema: String,
+    database: String,
     ssl: Option<bool>,
-    file: Option<String>,
-    kind: DBType
+}
+
+#[derive(Deserialize, Getters)]
+pub struct SqliteConfig {
+    file_name: String,
 }
 
 #[derive(Deserialize)]
+#[serde(tag = "kind")]
 pub enum DBType {
-    POSTGRESQL,
-    SQLITE,
+    POSTGRESQL(DBConfig),
+    SQLITE(SqliteConfig),
 }
 
-impl DBConfig {
+impl DBType {
     pub fn get_db_url(&self) -> String {
-        match self.kind() {
-            DBType::POSTGRESQL => {
-                let ssl = self.ssl().unwrap_or(false);
+        match self {
+            DBType::POSTGRESQL(db_config) => {
+                let ssl = db_config.ssl().unwrap_or(false);
                 format!(
                     "postgres://{}:{}@{}:{}/{}?sslmode={}&options=-c search_path={}",
-                    self.user().as_ref().expect("missing db user"),
-                    self.password().as_ref().expect("missing db password"),
-                    self.address().as_ref().expect("missing db address"),
-                    self.port().as_ref().expect("missing db port"),
-                    self.database().as_ref().expect("missing db database"),
+                    db_config.user(),
+                    db_config.password(),
+                    db_config.address(),
+                    db_config.port(),
+                    db_config.database(),
                     if ssl { "require" } else { "disable" },
-                    self.schema().as_ref().expect("missing db schema"),
+                    db_config.schema(),
                 )
             }
-            DBType::SQLITE => {
-                let file_name = self.file.as_ref().expect("missing db file");
+            DBType::SQLITE(db_config) => {
+                let file_name = db_config.file_name();
                 format!("sqlite://{file_name}")
-            },
+            }
         }
     }
 }
 
-pub enum DBConnection {
-    POSTGRES(PgConnection),
-    SQLITE(SqliteConnection),
-}

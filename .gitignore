@@ -34,10 +34,13 @@ out/
 
 ### VS Code ###
 .vscode/
-
+.history
 cache
 
 
 # Added by cargo
 
 /target
+
+# Test db file
+db
