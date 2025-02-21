@@ -8,15 +8,17 @@ use config::{Case, Config, Environment, File, FileFormat};
 use derive_getters::Getters;
 use derive_new::new;
 use diesel::backend::Backend;
-use diesel::migration::{Migration, MigrationConnection, MigrationSource, MigrationVersion};
-use diesel::r2d2::{ConnectionManager, ManageConnection, Pool, PooledConnection, R2D2Connection};
+use diesel::migration::{Migration, MigrationConnection, MigrationSource};
+use diesel::r2d2::{
+    Builder, ConnectionManager, ManageConnection, Pool, PooledConnection, R2D2Connection,
+};
 use diesel::{Connection, PgConnection, QueryDsl, SqliteConnection};
 use diesel_migrations::{FileBasedMigrations, MigrationHarness};
 use model::config::AppConfig;
 use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
 use serde::Deserialize;
-use std::collections::HashSet;
 use std::error::Error;
+use std::time::Duration;
 
 #[derive(Parser, Deserialize)]
 pub struct Args {
@@ -66,10 +68,9 @@ async fn main() -> () {
         .build()
         .expect("cannot parse config");
     let app_config: AppConfig = raw_cfg.try_deserialize().unwrap();
-    let db_connection =
-        establish_db_connection(&app_config).expect("cannot establish connection to db");
+    let pool = connect_db(&app_config).expect("cannot establish connection to db");
 
-    let mut app = App::new(db_connection);
+    let mut app = App::new(pool);
 
     if let Some(migration_path) = app_config.migration_path() {
         let migration =
@@ -85,28 +86,51 @@ async fn main() -> () {
     axum::serve(listener, router).await.unwrap();
 }
 
-pub fn establish_db_connection(app: &AppConfig) -> Result<DBPool, String> {
-    match app.db() {
+pub fn connect_db(app_config: &AppConfig) -> Result<DBPool, String> {
+    match app_config.db() {
         DBType::POSTGRESQL(_) => {
-            let manager = ConnectionManager::<PgConnection>::new(app.db().get_db_url());
-            let pool = establish_db_pool(manager)?;
+            let manager = ConnectionManager::<PgConnection>::new(app_config.db().get_db_url());
+            let pool = establish_db_pool(app_config, manager)?;
             Ok(POSTGRES(pool))
         }
         DBType::SQLITE(_) => {
-            let manager = ConnectionManager::<SqliteConnection>::new(app.db().get_db_url());
-            let pool = establish_db_pool(manager)?;
+            let manager = ConnectionManager::<SqliteConnection>::new(app_config.db().get_db_url());
+            let pool = establish_db_pool(app_config, manager)?;
             Ok(SQLITE(pool))
         }
     }
 }
 
 fn establish_db_pool<T: R2D2Connection + 'static>(
+    app_config: &AppConfig,
     manager: ConnectionManager<T>,
 ) -> Result<Pool<ConnectionManager<T>>, String> {
-    let pool = Pool::builder()
-        .test_on_check_out(true)
-        .build(manager)
-        .map_err(|e| e.to_string())?;
+    let mut pool_builder: Builder<ConnectionManager<T>> = Pool::builder();
+    if let Some(pool_config) = app_config.pool() {
+        if let Some(test_on_checkout) = pool_config.test_on_check_out() {
+            pool_builder = pool_builder.test_on_check_out(test_on_checkout.to_owned());
+        }
+        if let Some(connection_timeout_in_sec) = pool_config.connection_timeout_in_sec() {
+            pool_builder = pool_builder.connection_timeout(Duration::from_secs(
+                connection_timeout_in_sec.to_owned() as u64,
+            ));
+        }
+        if let Some(max_size) = pool_config.max_size() {
+            pool_builder = pool_builder.max_size(max_size.to_owned());
+        }
+        pool_builder = pool_builder.min_idle(pool_config.min_idle().to_owned());
+        pool_builder = pool_builder.max_lifetime(
+            pool_config
+                .max_lifetime_in_sec()
+                .map(|v| Duration::from_secs(v as u64)),
+        );
+        pool_builder = pool_builder.idle_timeout(
+            pool_config
+                .idle_timeout_in_sec()
+                .map(|v| Duration::from_secs(v as u64)),
+        );
+    }
+    let pool = pool_builder.build(manager).map_err(|e| e.to_string())?;
     Ok(pool)
 }
 

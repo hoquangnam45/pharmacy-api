@@ -5,6 +5,7 @@ use serde::Deserialize;
 #[derive(Deserialize, Getters)]
 pub struct AppConfig {
     db: DBType,
+    pool: Option<PoolConfig>,
     migration_path: Option<String>,
 }
 
@@ -17,6 +18,16 @@ pub struct DBConfig {
     schema: String,
     database: String,
     ssl: Option<bool>,
+}
+
+#[derive(Deserialize, Getters)]
+pub struct PoolConfig {
+    max_size: Option<u32>,
+    min_idle: Option<u32>,
+    test_on_check_out: Option<bool>,
+    max_lifetime_in_sec: Option<u32>,
+    idle_timeout_in_sec: Option<u32>,
+    connection_timeout_in_sec: Option<u32>
 }
 
 #[derive(Deserialize, Getters)]

@@ -1,4 +1,11 @@
 db:
   file_name: db/pharmacy.sqlite3
   kind: SQLITE
+pool:
+  max_size: 10
+  min_idle: 5
+  test_on_check_out: true
+  max_lifetime_in_sec: 1800
+  idle_timeout_in_sec: 600
+  connection_timeout_in_sec: 30
 migration_path: migrations
