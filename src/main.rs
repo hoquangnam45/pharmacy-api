@@ -7,16 +7,16 @@ use clap::Parser;
 use config::{Case, Config, Environment, File, FileFormat};
 use derive_getters::Getters;
 use derive_new::new;
-use diesel::migration::{Migration, MigrationSource, MigrationVersion};
-use diesel::r2d2::{ConnectionManager, ManageConnection, Pool, R2D2Connection};
-use diesel::{Connection, PgConnection, SqliteConnection};
-use diesel_migrations::{
-    FileBasedMigrations, MigrationHarness,
-};
+use diesel::backend::Backend;
+use diesel::migration::{Migration, MigrationConnection, MigrationSource, MigrationVersion};
+use diesel::r2d2::{ConnectionManager, ManageConnection, Pool, PooledConnection, R2D2Connection};
+use diesel::{Connection, PgConnection, QueryDsl, SqliteConnection};
+use diesel_migrations::{FileBasedMigrations, MigrationHarness};
 use model::config::AppConfig;
-use serde::Deserialize;
-use std::error::Error;
 use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
+use serde::Deserialize;
+use std::collections::HashSet;
+use std::error::Error;
 
 #[derive(Parser, Deserialize)]
 pub struct Args {
@@ -37,7 +37,7 @@ pub enum DBPool {
 
 impl App {
     fn pool_mut(&mut self) -> &mut DBPool {
-        return &mut self.pool;
+        &mut self.pool
     }
 }
 
@@ -74,7 +74,7 @@ async fn main() -> () {
     if let Some(migration_path) = app_config.migration_path() {
         let migration =
             FileBasedMigrations::from_path(migration_path).expect("cannot load migration path");
-        run_migration(&mut app, &migration);
+        run_migration(&mut app, migration).expect("failed to migrate database");
     }
 
     tracing_subscriber::fmt::init();
@@ -112,16 +112,33 @@ fn establish_db_pool<T: R2D2Connection + 'static>(
 
 pub fn run_migration(
     app: &mut App,
-    file_migrations: &FileBasedMigrations,
-) -> Vec<MigrationVersion<'static>> {
+    file_migrations: FileBasedMigrations,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     match app.pool_mut() {
-        POSTGRES(ref mut conPool) => {
-            let mut con = conPool.try_get().expect("failed to get connection to perform migration");
-            file_migrations.migrations().expect("failed to load migration file").iter().map(|m| con.run_migration(m).expect("failed to execute migration file")).collect()
-        },
-        SQLITE(ref mut conPool) => {
-            let mut con = conPool.try_get().expect("failed to get connection to perform migration");
-            file_migrations.migrations().expect("failed to load migration file").iter().map(|m| con.run_migration(m).expect("failed to execute migration file")).collect()
+        POSTGRES(ref mut con_pool) => {
+            let mut con = con_pool
+                .try_get()
+                .ok_or("failed to get connection to perform migration")?;
+            apply_migration(file_migrations, &mut con)
+        }
+        SQLITE(ref mut con_pool) => {
+            let mut con = con_pool
+                .try_get()
+                .ok_or("failed to get connection to perform migration")?;
+            apply_migration(file_migrations, &mut con)
         }
     }
+}
+
+fn apply_migration<DB, Con>(
+    file_migrations: FileBasedMigrations,
+    con: &mut PooledConnection<ConnectionManager<Con>>,
+) -> Result<(), Box<dyn Error + Send + Sync>>
+where
+    DB: Backend,
+    Con: R2D2Connection + MigrationHarness<DB> + MigrationConnection + 'static,
+{
+    con.setup()?;
+    con.run_pending_migrations(file_migrations)?;
+    Ok(())
 }

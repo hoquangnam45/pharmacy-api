@@ -1,3 +1,4 @@
 db:
   file_name: db/pharmacy.sqlite3
   kind: SQLITE
+migration_path: migrations
