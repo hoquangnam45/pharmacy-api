@@ -1,5 +1,4 @@
 use derive_getters::Getters;
-use diesel::{PgConnection, SqliteConnection};
 use serde::Deserialize;
 
 #[derive(Deserialize, Getters)]
@@ -27,7 +26,7 @@ pub struct PoolConfig {
     test_on_check_out: Option<bool>,
     max_lifetime_in_sec: Option<u32>,
     idle_timeout_in_sec: Option<u32>,
-    connection_timeout_in_sec: Option<u32>
+    connection_timeout_in_sec: Option<u32>,
 }
 
 #[derive(Deserialize, Getters)]
@@ -65,4 +64,3 @@ impl DBType {
         }
     }
 }
-

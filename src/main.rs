@@ -1,5 +1,5 @@
 use crate::handler::root::hello_world;
-use crate::model::config::DBType;
+use config::DBType;
 use crate::DBPool::{POSTGRES, SQLITE};
 use axum::routing::get;
 use axum::Router;
@@ -14,7 +14,7 @@ use diesel::r2d2::{
 };
 use diesel::{Connection, PgConnection, QueryDsl, SqliteConnection};
 use diesel_migrations::{FileBasedMigrations, MigrationHarness};
-use model::config::AppConfig;
+use config::AppConfig;
 use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
 use serde::Deserialize;
 use std::error::Error;
@@ -46,6 +46,7 @@ impl App {
 pub mod handler;
 pub mod model;
 pub mod repo;
+pub mod config;
 
 #[tokio::main]
 async fn main() -> () {
