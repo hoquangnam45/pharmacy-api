@@ -1,14 +1,14 @@
 use crate::handler::root::hello_world;
 use crate::model::config::DBType;
-use crate::DBConnection::{POSTGRES, SQLITE};
+use crate::DBPool::{POSTGRES, SQLITE};
 use axum::routing::get;
 use axum::Router;
 use clap::Parser;
 use config::{Case, Config, Environment, File, FileFormat};
 use derive_getters::Getters;
 use derive_new::new;
-use diesel::migration::{Migration, MigrationVersion};
-use diesel::r2d2::{ConnectionManager, ManageConnection, Pool};
+use diesel::migration::{Migration, MigrationSource, MigrationVersion};
+use diesel::r2d2::{ConnectionManager, ManageConnection, Pool, R2D2Connection};
 use diesel::{Connection, PgConnection, SqliteConnection};
 use diesel_migrations::{
     FileBasedMigrations, MigrationHarness,
@@ -16,6 +16,7 @@ use diesel_migrations::{
 use model::config::AppConfig;
 use serde::Deserialize;
 use std::error::Error;
+use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
 
 #[derive(Parser, Deserialize)]
 pub struct Args {
@@ -25,13 +26,19 @@ pub struct Args {
 
 #[derive(new, Getters, Clone)]
 pub struct App {
-    con: DBConnection,
+    pool: DBPool,
 }
 
 #[derive(Clone)]
-pub enum DBConnection {
+pub enum DBPool {
     POSTGRES(Pool<ConnectionManager<PgConnection>>),
     SQLITE(Pool<ConnectionManager<SqliteConnection>>),
+}
+
+impl App {
+    fn pool_mut(&mut self) -> &mut DBPool {
+        return &mut self.pool;
+    }
 }
 
 pub mod handler;
@@ -62,23 +69,23 @@ async fn main() -> () {
     let db_connection =
         establish_db_connection(&app_config).expect("cannot establish connection to db");
 
-    let app = App::new(db_connection);
+    let mut app = App::new(db_connection);
 
     if let Some(migration_path) = app_config.migration_path() {
         let migration =
             FileBasedMigrations::from_path(migration_path).expect("cannot load migration path");
-        run_migration(&app, &migration).expect("cannot run migration on db");
+        run_migration(&mut app, &migration);
     }
 
     tracing_subscriber::fmt::init();
-    let router = Router::new().with_state(app).route("/", get(hello_world));
+    let router = Router::new().route("/", get(hello_world)).with_state(app);
 
     // run our app with hyper, listening globally on port 3000
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, router).await.unwrap();
 }
 
-pub fn establish_db_connection(app: &AppConfig) -> Result<DBConnection, String> {
+pub fn establish_db_connection(app: &AppConfig) -> Result<DBPool, String> {
     match app.db() {
         DBType::POSTGRESQL(_) => {
             let manager = ConnectionManager::<PgConnection>::new(app.db().get_db_url());
@@ -93,7 +100,7 @@ pub fn establish_db_connection(app: &AppConfig) -> Result<DBConnection, String> 
     }
 }
 
-fn establish_db_pool<T: ManageConnection>(
+fn establish_db_pool<T: R2D2Connection + 'static>(
     manager: ConnectionManager<T>,
 ) -> Result<Pool<ConnectionManager<T>>, String> {
     let pool = Pool::builder()
@@ -103,12 +110,18 @@ fn establish_db_pool<T: ManageConnection>(
     Ok(pool)
 }
 
-pub fn run_migration<DB>(
-    app: &App,
-    migration: &dyn Migration<DB>,
-) -> Result<MigrationVersion<'static>, Box<dyn Error + Send + Sync>> {
-    match app.con() {
-        POSTGRES(ref mut con) => con.run_migration(),
-        SQLITE(ref mut con) => con.run_migration(&migration),
+pub fn run_migration(
+    app: &mut App,
+    file_migrations: &FileBasedMigrations,
+) -> Vec<MigrationVersion<'static>> {
+    match app.pool_mut() {
+        POSTGRES(ref mut conPool) => {
+            let mut con = conPool.try_get().expect("failed to get connection to perform migration");
+            file_migrations.migrations().expect("failed to load migration file").iter().map(|m| con.run_migration(m).expect("failed to execute migration file")).collect()
+        },
+        SQLITE(ref mut conPool) => {
+            let mut con = conPool.try_get().expect("failed to get connection to perform migration");
+            file_migrations.migrations().expect("failed to load migration file").iter().map(|m| con.run_migration(m).expect("failed to execute migration file")).collect()
+        }
     }
 }
