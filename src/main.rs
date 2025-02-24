@@ -1,20 +1,24 @@
+use crate::handler::auth::{
+    admin_login, admin_logout, admin_refresh, login, logout, refresh, register,
+};
 use crate::handler::root::hello_world;
-use config::DBType;
+use crate::repo::auth::AuthRepo;
+use crate::service::auth::AuthService;
 use crate::DBPool::{POSTGRES, SQLITE};
-use axum::routing::get;
+use app_config::AppConfig;
+use app_config::DBType;
+use axum::routing::{get, post};
 use axum::Router;
 use clap::Parser;
 use config::{Case, Config, Environment, File, FileFormat};
 use derive_getters::Getters;
 use derive_new::new;
-use diesel::backend::Backend;
-use diesel::migration::{Migration, MigrationConnection, MigrationSource};
+use diesel::migration::MigrationConnection;
 use diesel::r2d2::{
-    Builder, ConnectionManager, ManageConnection, Pool, PooledConnection, R2D2Connection,
+    Builder, ConnectionManager, Pool, PooledConnection, R2D2Connection,
 };
-use diesel::{Connection, PgConnection, QueryDsl, SqliteConnection};
+use diesel::{PgConnection, SqliteConnection};
 use diesel_migrations::{FileBasedMigrations, MigrationHarness};
-use config::AppConfig;
 use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
 use serde::Deserialize;
 use std::error::Error;
@@ -29,6 +33,18 @@ pub struct Args {
 #[derive(new, Getters, Clone)]
 pub struct App {
     pool: DBPool,
+    repos: Repos,
+    services: Services,
+}
+
+#[derive(new, Getters, Clone)]
+pub struct Services {
+    auth: AuthService,
+}
+
+#[derive(new, Getters, Clone)]
+pub struct Repos {
+    auth: AuthRepo,
 }
 
 #[derive(Clone)]
@@ -37,27 +53,39 @@ pub enum DBPool {
     SQLITE(Pool<ConnectionManager<SqliteConnection>>),
 }
 
-impl App {
-    fn pool_mut(&mut self) -> &mut DBPool {
-        &mut self.pool
+pub enum DBConnection {
+    POSTGRES(PooledConnection<ConnectionManager<PgConnection>>),
+    SQLITE(PooledConnection<ConnectionManager<SqliteConnection>>),
+}
+
+impl DBPool {
+    fn get_con(&self) -> Result<DBConnection, String> {
+        match self {
+            POSTGRES(pool) => pool
+                .try_get()
+                .ok_or("cant get connection from pool".to_owned())
+                .map(DBConnection::POSTGRES),
+            SQLITE(pool) => pool
+                .try_get()
+                .ok_or("cant get connection from pool".to_owned())
+                .map(DBConnection::SQLITE),
+        }
     }
 }
 
+pub mod app_config;
 pub mod handler;
-pub mod model;
 pub mod repo;
-pub mod config;
+pub mod service;
 
 #[tokio::main]
 async fn main() -> () {
-    let args = match Args::try_parse() {
-        Ok(v) => v,
-        Err(e) => {
+    let args = Args::try_parse()
+        .map_err(|e| {
             let msg = e.to_string();
-            print!("{msg}");
-            return;
-        }
-    };
+            format!("{msg}")
+        })
+        .unwrap();
     let cfg_path = args.cfg_path;
     let raw_cfg = Config::builder()
         .add_source(
@@ -71,7 +99,9 @@ async fn main() -> () {
     let app_config: AppConfig = raw_cfg.try_deserialize().unwrap();
     let pool = connect_db(&app_config).expect("cannot establish connection to db");
 
-    let mut app = App::new(pool);
+    let repos = init_repos(pool.clone());
+    let services = init_services(repos.clone());
+    let mut app = App::new(pool, repos, services);
 
     if let Some(migration_path) = app_config.migration_path() {
         let migration =
@@ -80,11 +110,49 @@ async fn main() -> () {
     }
 
     tracing_subscriber::fmt::init();
-    let router = Router::new().route("/", get(hello_world)).with_state(app);
 
-    // run our app with hyper, listening globally on port 3000
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    axum::serve(listener, router).await.unwrap();
+    let v1_public_api = Router::new()
+        .nest(
+            "/auth",
+            Router::new()
+                .route("/login", post(login))
+                .route("/register", post(register))
+                .route("/logout", post(logout))
+                .route("/refresh", post(refresh)),
+        )
+        .with_state(app.clone());
+    let v1_admin_api = Router::new().nest(
+        "/admin",
+        Router::new().nest(
+            "/auth",
+            Router::new()
+                .route("/login", post(admin_login))
+                .route("/logout", post(admin_logout))
+                .route("/refresh", post(admin_refresh)),
+        ),
+    );
+    let v1_api = v1_public_api.merge(v1_admin_api);
+
+    let router = Router::new()
+        .route("/", get(hello_world))
+        .nest("/api", Router::new().nest("/v1", v1_api))
+        .with_state(app);
+
+    let bind_address = format!(
+        "{}:{}",
+        app_config
+            .address()
+            .as_ref()
+            .map(String::as_str)
+            .unwrap_or("0.0.0.0"),
+        app_config.port().unwrap_or(8888)
+    );
+    let listener = tokio::net::TcpListener::bind(bind_address.as_str())
+        .await
+        .expect(format!("failed to bind to {bind_address}").as_str());
+    axum::serve(listener, router)
+        .await
+        .expect("failed to serve API");
 }
 
 pub fn connect_db(app_config: &AppConfig) -> Result<DBPool, String> {
@@ -139,31 +207,30 @@ pub fn run_migration(
     app: &mut App,
     file_migrations: FileBasedMigrations,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    match app.pool_mut() {
-        POSTGRES(ref mut con_pool) => {
-            let mut con = con_pool
-                .try_get()
-                .ok_or("failed to get connection to perform migration")?;
-            apply_migration(file_migrations, &mut con)
-        }
-        SQLITE(ref mut con_pool) => {
-            let mut con = con_pool
-                .try_get()
-                .ok_or("failed to get connection to perform migration")?;
-            apply_migration(file_migrations, &mut con)
-        }
-    }
+    apply_migration(file_migrations, &mut app.pool().get_con()?)
 }
 
-fn apply_migration<DB, Con>(
+fn apply_migration(
     file_migrations: FileBasedMigrations,
-    con: &mut PooledConnection<ConnectionManager<Con>>,
-) -> Result<(), Box<dyn Error + Send + Sync>>
-where
-    DB: Backend,
-    Con: R2D2Connection + MigrationHarness<DB> + MigrationConnection + 'static,
-{
-    con.setup()?;
-    con.run_pending_migrations(file_migrations)?;
+    con: &mut DBConnection,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    match con {
+        DBConnection::POSTGRES(c) => {
+            c.setup()?;
+            c.run_pending_migrations(file_migrations)?;
+        }
+        DBConnection::SQLITE(c) => {
+            c.setup()?;
+            c.run_pending_migrations(file_migrations)?;
+        }
+    }
     Ok(())
+}
+
+fn init_repos(pool: DBPool) -> Repos {
+    Repos::new(AuthRepo::new(pool.clone()))
+}
+
+fn init_services(repos: Repos) -> Services {
+    Services::new(AuthService::new(repos.auth().clone()))
 }

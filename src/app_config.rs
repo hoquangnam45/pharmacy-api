@@ -6,6 +6,8 @@ pub struct AppConfig {
     db: DBType,
     pool: Option<PoolConfig>,
     migration_path: Option<String>,
+    port: Option<u32>,
+    address: Option<String>,
 }
 
 #[derive(Deserialize, Getters)]
