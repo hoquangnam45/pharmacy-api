@@ -1,6 +1,6 @@
 db:
   file_name: db/pharmacy.sqlite3
-  kind: SQLITE
+  type: SQLITE
 pool:
   max_size: 10
   min_idle: 5

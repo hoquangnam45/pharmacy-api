@@ -2,7 +2,7 @@ use crate::handler::auth::{
     admin_login, admin_logout, admin_refresh, login, logout, refresh, register,
 };
 use crate::handler::root::hello_world;
-use crate::repo::auth::AuthRepo;
+use crate::repo::user::UserRepo;
 use crate::service::auth::AuthService;
 use crate::DBPool::{POSTGRES, SQLITE};
 use app_config::AppConfig;
@@ -44,7 +44,7 @@ pub struct Services {
 
 #[derive(new, Getters, Clone)]
 pub struct Repos {
-    auth: AuthRepo,
+    user: UserRepo,
 }
 
 #[derive(Clone)]
@@ -77,6 +77,7 @@ pub mod app_config;
 pub mod handler;
 pub mod repo;
 pub mod service;
+pub mod schema;
 
 #[tokio::main]
 async fn main() -> () {
@@ -103,6 +104,7 @@ async fn main() -> () {
     let services = init_services(repos.clone());
     let mut app = App::new(pool, repos, services);
 
+    // NOTE: Doing it like this instead of additional commands to set up the DB to reduce setup complexity
     if let Some(migration_path) = app_config.migration_path() {
         let migration =
             FileBasedMigrations::from_path(migration_path).expect("cannot load migration path");
@@ -119,8 +121,7 @@ async fn main() -> () {
                 .route("/register", post(register))
                 .route("/logout", post(logout))
                 .route("/refresh", post(refresh)),
-        )
-        .with_state(app.clone());
+        );
     let v1_admin_api = Router::new().nest(
         "/admin",
         Router::new().nest(
@@ -228,9 +229,9 @@ fn apply_migration(
 }
 
 fn init_repos(pool: DBPool) -> Repos {
-    Repos::new(AuthRepo::new(pool.clone()))
+    Repos::new(UserRepo::new(pool.clone()))
 }
 
 fn init_services(repos: Repos) -> Services {
-    Services::new(AuthService::new(repos.auth().clone()))
+    Services::new(AuthService::new(repos.user().clone()))
 }

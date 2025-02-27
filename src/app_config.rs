@@ -37,7 +37,7 @@ pub struct SqliteConfig {
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "kind")]
+#[serde(tag = "type")]
 pub enum DBType {
     POSTGRESQL(DBConfig),
     SQLITE(SqliteConfig),
