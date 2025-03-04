@@ -1,16 +1,19 @@
+use std::time::Duration;
 use derive_getters::Getters;
+use jwt::RegisteredClaims;
 use serde::Deserialize;
 
-#[derive(Deserialize, Getters)]
+#[derive(Clone, Deserialize, Getters)]
 pub struct AppConfig {
     db: DBType,
     pool: Option<PoolConfig>,
     migration_path: Option<String>,
     port: Option<u32>,
     address: Option<String>,
+    jwt: JwtConfig
 }
 
-#[derive(Deserialize, Getters)]
+#[derive(Clone, Deserialize, Getters)]
 pub struct DBConfig {
     user: String,
     password: String,
@@ -21,7 +24,7 @@ pub struct DBConfig {
     ssl: Option<bool>,
 }
 
-#[derive(Deserialize, Getters)]
+#[derive(Clone, Deserialize, Getters)]
 pub struct PoolConfig {
     max_size: Option<u32>,
     min_idle: Option<u32>,
@@ -31,16 +34,27 @@ pub struct PoolConfig {
     connection_timeout_in_sec: Option<u32>,
 }
 
-#[derive(Deserialize, Getters)]
+#[derive(Clone, Deserialize, Getters)]
 pub struct SqliteConfig {
     file_name: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(tag = "type")]
 pub enum DBType {
     POSTGRESQL(DBConfig),
     SQLITE(SqliteConfig),
+}
+
+#[derive(Clone, Deserialize, Getters)]
+pub struct JwtConfig {
+    access_token: RegisteredClaims,
+    refresh_token: RefreshTokenConfig
+}
+
+#[derive(Clone, Deserialize, Getters)]
+pub struct RefreshTokenConfig {
+    ttl: Option<Duration>
 }
 
 impl DBType {
