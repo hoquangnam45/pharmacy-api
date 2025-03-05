@@ -48,13 +48,18 @@ pub enum DBType {
 
 #[derive(Clone, Deserialize, Getters)]
 pub struct JwtConfig {
-    access_token: RegisteredClaims,
+    access_token: AccessTokenConfig,
     refresh_token: RefreshTokenConfig
 }
 
 #[derive(Clone, Deserialize, Getters)]
 pub struct RefreshTokenConfig {
-    ttl: Option<Duration>
+    expire_in_min: Option<Duration>
+}
+
+#[derive(Clone, Deserialize, Getters)]
+pub struct AccessTokenConfig {
+
 }
 
 impl DBType {
